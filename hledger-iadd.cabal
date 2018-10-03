@@ -50,6 +50,7 @@ library
                      , AmountParser
                      , DateParser
                      , ConfigParser
+                     , BayesClassifier
                      , Brick.Widgets.List.Utils
                      , Brick.Widgets.HelpMessage
                      , Brick.Widgets.CommentDialog
@@ -65,7 +66,10 @@ library
                      , vty >= 5.4
                      , text
                      , microlens
+                     , microlens-ghc
+                     , microlens-mtl
                      , microlens-th
+                     , mtl >= 2.0 && < 2.3
                      , text-zipper >= 0.10
                      , transformers >= 0.3
                      , time >= 1.5

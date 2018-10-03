@@ -32,6 +32,7 @@ import qualified Hledger as HL
 
 import           AmountParser
 import           DateParser
+import           BayesClassifier
 
 type Comment = Text
 type Duplicate = Bool
@@ -93,19 +94,28 @@ undo current = case current of
   AmountQuestion _ trans comment -> Right $ AccountQuestion trans comment
   FinalQuestion trans _ -> undo (AccountQuestion trans "")
 
-context :: HL.Journal -> MatchAlgo -> DateFormat -> Text -> Step -> IO [Text]
-context _ _ dateFormat entryText (DateQuestion _) = parseDateWithToday dateFormat entryText >>= \case
+context :: HL.Journal -> Classifier HL.AccountName -> MatchAlgo -> DateFormat -> Text -> Step -> IO [Text]
+context _ _ _ dateFormat entryText (DateQuestion _) = parseDateWithToday dateFormat entryText >>= \case
   Left _ -> return []
   Right date -> return [T.pack $ HL.showDate date]
-context j matchAlgo _ entryText (DescriptionQuestion _ _) = return $
+context j _ matchAlgo _ entryText (DescriptionQuestion _ _) = return $
   let descs = HL.journalDescriptions j
   in sortBy (descUses j) $ filter (matches matchAlgo entryText) descs
-context j matchAlgo _ entryText (AccountQuestion _ _) = return $
+context j classifier _ dateFormat "" step@(AccountQuestion trn _) =
+  let minCertainty = 0.01 :: Double
+      isApplicable acct = acct `notElem` (labelsOf trn :: [HL.AccountName])
+      inferred = map fst . filter ((> minCertainty) . snd) $ classify' isApplicable trn classifier
+  in do
+    suggestion <- suggest j dateFormat step
+    return $ case suggestion of
+      Nothing -> inferred
+      Just acct -> acct : filter (/= acct) inferred
+context j _ matchAlgo _ entryText (AccountQuestion _ _) = return $
   let names = accountsByFrequency j
   in  filter (matches matchAlgo entryText) names
-context journal _ _ entryText (AmountQuestion _ _ _) = return $
+context journal _ _ _ entryText (AmountQuestion _ _ _) = return $
   maybeToList $ T.pack . HL.showMixedAmount <$> trySumAmount journal entryText
-context _ _ _ _  (FinalQuestion _ _) = return []
+context _ _ _ _ _  (FinalQuestion _ _) = return []
 
 -- | Suggest the initial text of the entry box for each step
 --

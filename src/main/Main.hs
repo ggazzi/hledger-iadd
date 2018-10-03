@@ -62,6 +62,7 @@ import Brick.Widgets.HelpMessage
 import Brick.Widgets.Border.Utils (borderLeft)
 import ConfigParser hiding (parseConfigFile)
 import DateParser
+import BayesClassifier
 import Model
 import View
 
@@ -72,6 +73,7 @@ data AppState = AppState
   { asEditor :: Editor Name
   , asStep :: Step
   , asJournal :: HL.Journal
+  , asClassifier :: Classifier HL.AccountName
   , asContext :: List Name Text
   , asSuggestion :: Maybe Text
   , asMessage :: Text
@@ -216,6 +218,7 @@ event as (VtyEvent ev) = case asDialog as of
     _ -> (AppState <$> handleEditorEvent ev (asEditor as)
                    <*> return (asStep as)
                    <*> return (asJournal as)
+                   <*> return (asClassifier as)
                    <*> return (asContext as)
                    <*> return (asSuggestion as)
                    <*> return ""
@@ -241,7 +244,7 @@ reset as = do
 setContext :: AppState -> IO AppState
 setContext as = do
   ctx <- flip listSimpleReplace (asContext as) . V.fromList <$>
-         context (asJournal as) (asMatchAlgo as) (asDateFormat as) (editText as) (asStep as)
+         context (asJournal as) (asClassifier as) (asMatchAlgo as) (asDateFormat as) (editText as) (asStep as)
   return as { asContext = ctx }
 
 editText :: AppState -> Text
@@ -270,7 +273,8 @@ doNextStep useSelected as = do
       sugg <- suggest (asJournal as) (asDateFormat as) (DateQuestion "")
       return AppState
         { asStep = DateQuestion ""
-        , asJournal = addTransactionEnd trans (asJournal  as)
+        , asJournal = addTransactionEnd trans (asJournal as)
+        , asClassifier = learn trans (asClassifier as)
         , asEditor = clearEdit (asEditor as)
         , asContext = ctxList V.empty
         , asSuggestion = sugg
@@ -283,7 +287,7 @@ doNextStep useSelected as = do
         }
     Right (Step s') -> do
       sugg <- suggest (asJournal as) (asDateFormat as) s'
-      ctx' <- ctxList . V.fromList <$> context (asJournal as) (asMatchAlgo as) (asDateFormat as) "" s'
+      ctx' <- ctxList . V.fromList <$> context (asJournal as) (asClassifier as) (asMatchAlgo as) (asDateFormat as) "" s'
       return as { asStep = s'
                 , asEditor = clearEdit (asEditor as)
                 , asContext = ctx'
@@ -540,7 +544,8 @@ main = do
 
       let welcome = "Welcome! Press F1 (or Alt-?) for help. Exit with Ctrl-d."
           matchAlgo = runIdentity $ optMatchAlgo opts
-          as = AppState edit (DateQuestion "") journal (ctxList V.empty) sugg welcome path date matchAlgo NoDialog []
+          classifier = buildClassifier (HL.jtxns journal)
+          as = AppState edit (DateQuestion "") journal classifier (ctxList V.empty) sugg welcome path date matchAlgo NoDialog []
 
       void $ defaultMain app as
 
