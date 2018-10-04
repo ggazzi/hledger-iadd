@@ -1,17 +1,20 @@
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE FlexibleInstances   #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE TypeApplications    #-}
-{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications  #-}
+{-# LANGUAGE TypeFamilies      #-}
 {- |
 Copyright:    Guilherme Grochau Azzi 2018
 License:      BSD3
 
-This module implements a naive Bayes classifier for values from which textual
-tokens can be extracted.
+This module implements a naive Bayes classifier for values containing textual
+tokens, assigning labels to such values.
 
+We assume that the probability of assigning a particular label is dependent on
+the probability of certain tokens occuring.  On the other hand, we make the
+naive assumption that the probability of each token is independent on the other
+tokens.  Although this is certainly false, it still produces good results with a
+simple algorithm.
 -}
 
 module BayesClassifier
@@ -42,7 +45,6 @@ module BayesClassifier
 import           Control.Applicative
 import           Control.Arrow
 import           Control.Monad
-import           Control.Monad.State
 import qualified Data.Char            as Char
 import           Data.Foldable
 import qualified Data.List            as List
@@ -54,13 +56,10 @@ import           Data.Text            (Text)
 import qualified Data.Text            as Text
 import           Data.Time.Calendar   (fromGregorian)
 import           Data.Time.Format     (defaultTimeLocale, parseTimeM)
-import           Lens.Micro
-import           Lens.Micro.Mtl
-import           Lens.Micro.GHC ()
-import           Lens.Micro.TH (makeLenses)
+import           Hledger              (AccountName, Posting (..),
+                                       Transaction (..))
 import qualified Text.Megaparsec      as Parser
 import qualified Text.Megaparsec.Char as Parser
-import Hledger (AccountName, Posting(..), Transaction(..))
 
 
 newtype Token = Token
@@ -81,17 +80,16 @@ class Tokenizable a where
 
 -- | A naive Bayes classifier that assigns @label@s to multisets of 'Token's.
 data Classifier label = Model
-  { _nEntries              :: Int
-  , _nTotalTokens          :: Int
-  , _nTokenOccurs          :: Map Token Int
-  , _nTokenOccursWithLabel :: Map (Token, label) Int
-  , _nEntriesWithLabel     :: Map label Int
-  , _nTokensWithLabel      :: Map label Int
+  { nEntries              :: Int
+  , nTotalTokens          :: Int
+  , nTokenOccurs          :: Map Token Int
+  , nTokenOccursWithLabel :: Map (Token, label) Int
+  , nEntriesWithLabel     :: Map label Int
+  , nTokensWithLabel      :: Map label Int
   } deriving (Show)
-makeLenses ''Classifier
 
-nDistinctTokens :: SimpleGetter (Classifier label) Int
-nDistinctTokens = nTokenOccurs . to Map.size
+nDistinctTokens :: Classifier label -> Int
+nDistinctTokens = Map.size . nTokenOccurs
 
 -- Text is tokenized according to the rules described later.
 instance Tokenizable Text where
@@ -142,17 +140,25 @@ buildClassifier = foldl' (flip learn) emptyClassifier
 -- | Train a classifier on the given value.
 learn :: (Tokenizable a, Labeled a, Ord (Label a)) =>
          a -> Classifier (Label a) -> Classifier (Label a)
-learn entry = execState $ do
-  let tokens = tokenize entry
-      nTokens = length tokens
-  nEntries += 1
-  nTotalTokens += nTokens
-  forM_ (labelsOf entry) $ \lbl -> do
-    nEntriesWithLabel . at lbl +?= 1
-    nTokensWithLabel . at lbl +?= nTokens
-    forM_ tokens $ \tok -> do
-      nTokenOccurs . at tok +?= 1
-      nTokenOccursWithLabel . at (tok, lbl) +?= 1
+learn entry c =
+  let c' = c { nEntries = nEntries c + 1
+             , nTotalTokens = nTotalTokens c + nEntryTokens }
+  in List.foldl' learnFromLabel c' (labelsOf entry)
+  where
+    entryTokens = tokenize entry
+    nEntryTokens = length entryTokens
+
+    learnFromLabel c lbl =
+      let c' = c { nEntriesWithLabel = incrementAt lbl 1 (nEntriesWithLabel c)
+                 , nTokensWithLabel = incrementAt lbl nEntryTokens (nTokensWithLabel c) }
+      in List.foldl' (learnFromLabelAndToken lbl) c' entryTokens
+
+    learnFromLabelAndToken lbl c tok =
+      c { nTokenOccurs = incrementAt tok 1 (nTokenOccurs c)
+        , nTokenOccursWithLabel = incrementAt (tok, lbl) 1 (nTokenOccursWithLabel c) }
+
+incrementAt :: (Ord k, Num a) => k -> a -> Map k a -> Map k a
+incrementAt k v = Map.alter (Just . maybe v (+v)) k
 
 -- | Estimate the most likely applicable label for the given list of tokens.
 --  The first argument is a predicate determining which labels are applicable.
@@ -167,18 +173,17 @@ classifyToks labelApplicable toks = fst . head
 classifyToks' :: (Ord prob, Fractional prob, Ord label) =>
                  (label -> Bool) -> [Token] -> Classifier label -> [(label, prob)]
 classifyToks' labelApplicable toks model =
-  let
-    toks'= filter (`containsToken` model) toks
-    pToks = probTokens model toks'
-    pLabelGivenToks lbl = probTokensAndLabel model toks' lbl / pToks
-  in
-    List.sortOn (Ord.Down . snd)
-    $ model ^.. knownLabels
-              . filtered labelApplicable
-              . to (id &&& pLabelGivenToks)
+  List.sortOn (Ord.Down . snd)
+  . map (id &&& pLabelGivenToks)
+  . filter labelApplicable
+  $ knownLabels model
   where
-    knownLabels = nTokensWithLabel . to Map.keys . each
-    containsToken tok model = tok `Map.member` (model ^. nTokenOccurs)
+    knownLabels = Map.keys . nTokensWithLabel
+    containsToken tok model = tok `Map.member` nTokenOccurs model
+
+    pLabelGivenToks lbl = probTokensAndLabel model toks' lbl / pToks
+    pToks = probTokens model toks'
+    toks' = filter (`containsToken` model) toks
 
 -- | Estimate the most likely applicable label for the given tokenizable value.
 -- The first argument is a predicate determining which labels are applicable.
@@ -215,27 +220,23 @@ probTokensGivenLabel model toks lbl =
 probTokenGivenLabel :: (Fractional prob, Ord label) =>
                        Classifier label -> Token -> label -> prob
 probTokenGivenLabel model tok lbl =
-  (fromMaybe 0 (model ^. nTokenOccursWithLabel . at (tok, lbl)) + 1)
-  // (fromMaybe 0 (model ^. nTokensWithLabel . at lbl) + (model ^. nDistinctTokens))
+  (Map.findWithDefault 0 (tok, lbl) (nTokenOccursWithLabel model) + 1)
+  // (Map.findWithDefault 0 lbl (nTokensWithLabel model) + nDistinctTokens model)
 
 -- | @probToken model tok = P(tok)@
 probToken :: (Fractional prob) => Classifier label -> Token -> prob
 probToken model tok =
-  fromMaybe 0 (model ^. nTokenOccurs . at tok)
-  // (model ^. nTotalTokens)
+  Map.findWithDefault 0 tok (nTokenOccurs model)
+  // nTotalTokens model
 
 -- | @probLabel model lbl = P(lbl)@
 probLabel :: (Fractional prob, Ord label) => Classifier label -> label -> prob
 probLabel model lbl =
-  fromMaybe 0 (model ^. nEntriesWithLabel . at lbl)
-  // (model ^. nEntries)
+  Map.findWithDefault 0 lbl (nEntriesWithLabel model)
+  // nEntries model
 
 (//) :: (Fractional r, Integral m, Integral n) => m -> n -> r
 a // b = fromIntegral a / fromIntegral b
-
-(+?=) :: (MonadState s m, Num a) => ASetter s s (Maybe a) (Maybe a) -> a -> m ()
-l +?= n = modifying l (Just . (+n) . fromMaybe 0)
-infix 4 +?=
 
 
 {- $tokenization

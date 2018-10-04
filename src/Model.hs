@@ -102,7 +102,8 @@ context j _ matchAlgo _ entryText (DescriptionQuestion _ _) = return $
   let descs = HL.journalDescriptions j
   in sortBy (descUses j) $ filter (matches matchAlgo entryText) descs
 context j classifier _ dateFormat "" step@(AccountQuestion trn _) =
-  let minCertainty = 0.01 :: Double
+  -- TODO: should we have this cutoff, or maybe limit the amount of suggestions?
+  let minCertainty = 0.001 :: Double
       isApplicable acct = acct `notElem` (labelsOf trn :: [HL.AccountName])
       inferred = map fst . filter ((> minCertainty) . snd) $ classify' isApplicable trn classifier
   in do
