@@ -253,7 +253,8 @@ identify three kinds of tokens.
   2. Numeric tokens: this includes unsigned integers and decimals.
 
   3. Textual tokens: any other sequence of characters that doesn't include
-  spaces or punctuation, as defined by the unicode standard.
+  spaces or punctuation, as defined by the unicode standard.  In order to force
+  caseless comparison of these tokens, they are converted using 'Text.toCaseFold'.
 -}
 
 type TextParser = Parser.Parsec () Text
@@ -269,7 +270,7 @@ isSeparator :: Char -> Bool
 isSeparator c = Char.isSpace c || Char.isPunctuation c
 
 textToken, numberToken, dateToken :: TextParser Token
-textToken = token <$> Parser.takeWhile1P Nothing (\c -> not $ isSeparator c || Char.isDigit c)
+textToken = token . Text.toCaseFold <$> Parser.takeWhile1P Nothing (\c -> not $ isSeparator c || Char.isDigit c)
 numberToken = token <$> number
   where
     number =

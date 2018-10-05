@@ -105,7 +105,7 @@ context j classifier _ dateFormat "" step@(AccountQuestion trn _) =
   -- TODO: should we have this cutoff, or maybe limit the amount of suggestions?
   let minCertainty = 0.001 :: Double
       isApplicable acct = acct `notElem` (labelsOf trn :: [HL.AccountName])
-      inferred = map fst . filter ((> minCertainty) . snd) $ classify' isApplicable trn classifier
+      inferred = map fst . take 15 . filter ((> minCertainty) . snd) $ classify' isApplicable trn classifier
   in do
     suggestion <- suggest j dateFormat step
     return $ case suggestion of
