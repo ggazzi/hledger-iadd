@@ -109,7 +109,7 @@ context j classifier _ dateFormat "" step@(AccountQuestion trn _) =
   in do
     suggestion <- suggest j dateFormat step
     return $ case suggestion of
-      Nothing -> inferred
+      Nothing -> "" : inferred
       Just acct -> acct : filter (/= acct) inferred
 context j _ matchAlgo _ entryText (AccountQuestion _ _) = return $
   let names = accountsByFrequency j
